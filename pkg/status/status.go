@@ -29,7 +29,7 @@ import (
 )
 
 // Update will set status fields in the VerticaDB.  It handles retry for
-// transient errors like update fails because another client updated the
+// transient errors like when update fails because another client updated the
 // VerticaDB.
 func Update(ctx context.Context, clnt client.Client, vdb *vapi.VerticaDB, updateFunc func(*vapi.VerticaDB) error) error {
 	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
