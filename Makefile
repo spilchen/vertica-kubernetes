@@ -590,3 +590,7 @@ tag: ## Create a release tag and push it to GitHub
 	@git tag -d v$(VERSION) 2> /dev/null || true
 	git tag --sign --message "verticadb-operator $(VERSION)" v$(VERSION)
 	git verify-tag --verbose v$(VERSION)
+
+echo-versions:  ## Print the current versions for various components
+	@echo "VERSION=$(VERSION)"
+	@echo "VLOGGER_VERSION=$(VLOGGER_VERSION)"

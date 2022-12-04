@@ -65,6 +65,3 @@ logInfo "Changing version in the helm chart"
 perl -i -0777 -pe "s/(name: .*verticadb-operator:)[0-9\.]+/\${1}$VERSION/g" $REPO_DIR/helm-charts/verticadb-operator/values.yaml
 perl -i -0777 -pe "s/^(version: )[0-9\.]+/\${1}$VERSION/gm" $REPO_DIR/helm-charts/verticadb-operator/Chart.yaml
 perl -i -0777 -pe "s/(verticadb-operator:)[0-9\.]+/\${1}$VERSION/g" $REPO_DIR/helm-charts/verticadb-operator/README.md
-
-logInfo "Changing version in the Pre-Release GitHub action"
-perl -i -0777 -pe "s/^(  OPERATOR_VERSION: )[0-9\.]+/\${1}$VERSION/gm" $REPO_DIR/.github/workflows/pre-release.yml

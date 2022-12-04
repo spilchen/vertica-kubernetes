@@ -27,11 +27,7 @@ on:
 
 run-name: "Pre-Release Action: ${{ inputs.action }}"
 
-permissions:
-  workflows: write
-
 env:
-  OPERATOR_VERSION: 1.9.0
   PR_OWNER: spilchen
 
 jobs:
@@ -69,6 +65,10 @@ jobs:
     steps:
     - uses: actions/checkout@v3
 
+    - name: Save current version to env
+      run: |
+        echo $(make echo-versions | grep -e '^VERSION=' ) >> $GITHUB_ENV
+
     - name: Generate changelog
       run: |
         make gen-changelog
@@ -76,7 +76,7 @@ jobs:
     - uses: stefanzweifel/git-auto-commit-action@v4
       id: commit
       with:
-        commit_message: Update CHANGELOG for version ${{ env.OPERATOR_VERSION }}
+        commit_message: Update CHANGELOG for version ${{ env.VERSION }}
         commit_options: '--signoff'
 
     - name: Print out details of the CHANGELOG commit
