@@ -27,6 +27,9 @@ on:
 
 run-name: "Pre-Release Action: ${{ inputs.action }}"
 
+permissions:
+  workflows: write
+
 env:
   OPERATOR_VERSION: 1.9.0
   PR_OWNER: spilchen
@@ -39,7 +42,7 @@ jobs:
     steps:
     - uses: actions/checkout@v3
 
-    - name: Build and optionally push full server image
+    - name: Change version in the source files
       run: |
         VERSION=${{ inputs.new-operator-version }} make change-operator-version
 
