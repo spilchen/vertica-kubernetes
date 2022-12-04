@@ -10,7 +10,6 @@ on:
         options:
         - change operator version
         - generate CHANGELOG
-        - generate release tag
       new-operator-version:
         description: 'When changing the version of the operator, this is the new version to move to (e.g. 1.8.0).'
         type: string
@@ -80,19 +79,3 @@ jobs:
     - name: Print out details of the CHANGELOG commit
       run: |
         echo "Commit hash of CHANGELOG generation: **${{ steps.commit.outputs.commit_hash }}**" >> $GITHUB_STEP_SUMMARY
-
-  tag:
-    runs-on: ubuntu-latest
-    if: ${{ inputs.action == 'generate release tag' }}
-    steps:
-    - uses: actions/checkout@v3
-
-    - name: Generate tag for the operator release
-      uses: rickstaa/action-create-tag@v1
-      with:
-        tag: ${{ env.OPERATOR_VERSION }}
-        message: "Release tag for version ${{ env.OPERATOR_VERSION }}"
-
-    - name: Print out tag details
-      run: |
-        git tag --verify ${{ env.OPERATOR_VERSION }} >> $GITHUB_STEP_SUMMARY

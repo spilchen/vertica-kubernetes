@@ -584,3 +584,9 @@ gen-changelog: changie ## Generate the changelog
 	@cd $(REPO_DIR)
 	$(CHANGIE) batch $(VERSION)
 	$(CHANGIE) merge
+
+.PHONY: tag
+tag: ## Create a release tag and push it to GitHub
+	@git tag -d v$(VERSION) 2> /dev/null || true
+	git tag --sign --message "verticadb-operator $(VERSION)" v$(VERSION)
+	git verify-tag --verbose v$(VERSION)
