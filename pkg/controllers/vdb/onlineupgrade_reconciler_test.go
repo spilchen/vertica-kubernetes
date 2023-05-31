@@ -17,6 +17,8 @@ package vdb
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -465,6 +467,52 @@ var _ = Describe("onlineupgrade_reconcile", func() {
 		routingSc = r.getSubclusterForTemporaryRouting(ctx, &vdb.Spec.Subclusters[1], scMap)
 		Expect(routingSc.Name).Should(Equal(PriScName))
 	})
+
+	It("should use drain only for newer versions of vertica", func() {
+		fpr := getPodRunnerForOnlineUpgrade(ctx, map[string]string{vapi.VersionAnnotation: "v11.1.0"})
+		Expect(len(fpr.FindCommands("select shutdown_with_drain"))).Should(Equal(0))
+		Expect(len(fpr.FindCommands("select count(session_id) sessions"))).Should(Equal(1))
+		fpr = getPodRunnerForOnlineUpgrade(ctx, map[string]string{vapi.VersionAnnotation: vapi.SubclusterDrainVersion})
+		Expect(len(fpr.FindCommands("select shutdown_with_drain"))).Should(Equal(1))
+		Expect(len(fpr.FindCommands("select count(session_id) sessions"))).Should(Equal(0))
+	})
+
+	It("should be able to control drain timeout with annotation", func() {
+		const DrainTimeout = "-1"
+		fpr := getPodRunnerForOnlineUpgrade(ctx, map[string]string{
+			vapi.VersionAnnotation:       vapi.SubclusterDrainVersion,
+			vmeta.DrainTimeoutAnnotation: DrainTimeout})
+		c := fpr.FindCommands("select shutdown_with_drain")
+		Expect(len(c)).Should(Equal(1))
+		Expect(strings.Join(c[0].Command, " ")).Should(ContainSubstring(DrainTimeout))
+	})
+
+	It("should handle down nodes in runVsqlIfUp", func() {
+		vdb := vapi.MakeVDB()
+		vdb.Spec.Subclusters = []vapi.Subcluster{
+			{Name: "sc1", IsPrimary: true, Size: 1},
+		}
+		sc := &vdb.Spec.Subclusters[0]
+		vdb.Spec.Image = OldImage
+		vdb.Spec.UpgradePolicy = vapi.OnlineUpgrade
+		test.CreateVDB(ctx, k8sClient, vdb)
+		defer test.DeleteVDB(ctx, k8sClient, vdb)
+		test.CreatePods(ctx, k8sClient, vdb, test.AllPodsRunning)
+		defer test.DeletePods(ctx, k8sClient, vdb)
+
+		vdb.Spec.Image = NewImageName // Trigger an upgrade
+		Expect(k8sClient.Update(ctx, vdb)).Should(Succeed())
+
+		r := createOnlineUpgradeReconciler(ctx, vdb)
+		pn := names.GenPodName(vdb, sc, 0)
+		fpr := r.PRunner.(*cmds.FakePodRunner)
+		fpr.Results[pn] = []cmds.CmdResult{
+			{Stderr: "Is the server running on host", Err: fmt.Errorf("Node was down")},
+		}
+		_, foundUpNode, err := r.runVsqlIfUp(ctx, sc.Name, "select 1")
+		Expect(err).Should(Succeed())
+		Expect(foundUpNode).Should(BeFalse())
+	})
 })
 
 // createOnlineUpgradeReconciler is a helper to run the OnlineUpgradeReconciler.
@@ -481,4 +529,27 @@ func createOnlineUpgradeReconciler(ctx context.Context, vdb *vapi.VerticaDB) *On
 	r.PFacts.Detail[pn].readOnly = false
 
 	return r
+}
+
+func getPodRunnerForOnlineUpgrade(ctx context.Context, annotations map[string]string) *cmds.FakePodRunner {
+	vdb := vapi.MakeVDB()
+	vdb.Spec.Image = "v1"
+	const PriScName = "pri1"
+	vdb.Spec.Subclusters = []vapi.Subcluster{
+		{Name: PriScName, IsPrimary: true, Size: 1},
+	}
+	test.CreateVDB(ctx, k8sClient, vdb)
+	defer test.DeleteVDB(ctx, k8sClient, vdb)
+	test.CreatePods(ctx, k8sClient, vdb, test.AllPodsRunning)
+	defer test.DeletePods(ctx, k8sClient, vdb)
+
+	// Run on old versions that doesn't have drain
+	vdb.ObjectMeta.Annotations = annotations
+	vdb.Spec.Image = "v2" // Trigger an upgrade
+	Expect(k8sClient.Update(ctx, vdb)).Should(Succeed())
+
+	r := createOnlineUpgradeReconciler(ctx, vdb)
+	fpr := r.PRunner.(*cmds.FakePodRunner)
+	Expect(r.Reconcile(ctx, &ctrl.Request{})).Should(Equal(ctrl.Result{Requeue: false, RequeueAfter: vdb.GetUpgradeRequeueTime()}))
+	return fpr
 }

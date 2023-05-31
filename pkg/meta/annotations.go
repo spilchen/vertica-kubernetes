@@ -25,11 +25,17 @@ const (
 	KubernetesGitCommitAnnotation = "kubernetes.io/gitcommit" // Git commit of the k8s server
 	KubernetesBuildDateAnnotation = "kubernetes.io/buildDate" // Build date of the k8s server
 
-	// If this label is on any CR, the operator will skip processing. This can
+	// If this annotation is on any CR, the operator will skip processing. This can
 	// be used to avoid getting in an infinity error-retry loop. Or, if you know
 	// no additional work will ever exist for an object. Just set this to a
 	// true|ON|1 value.
 	PauseOperatorAnnotation = "vertica.com/pause"
+
+	// If this annotation is set, whenever we do a subcluster drain, we will use
+	// this value as the timeout (in seconds). Values accepted are: positive
+	// integer, 0 and -1
+	DrainTimeoutAnnotation   = "vertica.com/drain-timeout"
+	DrainTimeoutDefaultValue = 300
 )
 
 // IsPauseAnnotationSet will check the annotations for a special value that will

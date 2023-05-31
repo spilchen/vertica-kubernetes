@@ -18,8 +18,10 @@ package vdb
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-logr/logr"
 	vapi "github.com/vertica/vertica-kubernetes/api/v1beta1"
@@ -41,17 +43,19 @@ import (
 // OnlineUpgradeReconciler will handle the process when the vertica image
 // changes.  It does this while keeping the database online.
 type OnlineUpgradeReconciler struct {
-	VRec          *VerticaDBReconciler
-	Log           logr.Logger
-	Vdb           *vapi.VerticaDB  // Vdb is the CRD we are acting on.
-	TransientSc   *vapi.Subcluster // Set to the transient subcluster if applicable
-	PRunner       cmds.PodRunner
-	PFacts        *PodFacts
-	Finder        iter.SubclusterFinder
-	Manager       UpgradeManager
-	PrimaryImages []string // Known images in the primaries.  Should be of length 1 or 2.
-	StatusMsgs    []string // Precomputed status messages
-	MsgIndex      int      // Current index in StatusMsgs
+	VRec                      *VerticaDBReconciler
+	Log                       logr.Logger
+	Vdb                       *vapi.VerticaDB  // Vdb is the CRD we are acting on.
+	TransientSc               *vapi.Subcluster // Set to the transient subcluster if applicable
+	PRunner                   cmds.PodRunner
+	PFacts                    *PodFacts
+	Finder                    iter.SubclusterFinder
+	Manager                   UpgradeManager
+	PrimaryImages             []string // Known images in the primaries.  Should be of length 1 or 2.
+	StatusMsgs                []string // Precomputed status messages
+	MsgIndex                  int      // Current index in StatusMsgs
+	UsePrimaryDrainWaitBudget bool     // Whether to budget time waiting for primary subclusters to drain
+	PrimaryDrainWaitBudget    int      // Number of seconds to wait for all primaries to drain
 }
 
 // MakeOnlineUpgradeReconciler will build an OnlineUpgradeReconciler object
@@ -127,6 +131,8 @@ func (o *OnlineUpgradeReconciler) loadSubclusterState(ctx context.Context) (ctrl
 
 	o.TransientSc = o.Vdb.FindTransientSubcluster()
 
+	o.PrimaryDrainWaitBudget = o.getDrainTimeout()
+	o.UsePrimaryDrainWaitBudget = o.PrimaryDrainWaitBudget >= 0
 	err = o.cachePrimaryImages(ctx)
 	return ctrl.Result{}, err
 }
@@ -136,7 +142,9 @@ func (o *OnlineUpgradeReconciler) loadSubclusterState(ctx context.Context) (ctrl
 func (o *OnlineUpgradeReconciler) precomputeStatusMsgs(ctx context.Context) (ctrl.Result, error) {
 	o.StatusMsgs = []string{
 		"Creating transient secondary subcluster",
-		"Draining primary subclusters",
+		"Rerouting client traffic away from primary subclusters",
+		"Synchronously waiting for drain of primary subclusters",
+		"Shutting down primary subclusters",
 		"Recreating pods for primary subclusters",
 		"Checking if new version is compatible",
 		"Adding annotations to pods",
@@ -340,7 +348,9 @@ func (o *OnlineUpgradeReconciler) restartPrimaries(ctx context.Context) (ctrl.Re
 	o.Log.Info("Starting the handling of primaries")
 
 	funcs := []func(context.Context, *appsv1.StatefulSet) (ctrl.Result, error){
+		o.bringSubclusterOffline,
 		o.drainSubcluster,
+		o.shutdownSubcluster,
 		o.recreateSubclusterWithNewImage,
 		o.checkVersion,
 		o.addPodAnnotations,
@@ -372,8 +382,10 @@ func (o *OnlineUpgradeReconciler) restartSecondaries(ctx context.Context) (ctrl.
 func (o *OnlineUpgradeReconciler) processSecondary(ctx context.Context, sts *appsv1.StatefulSet) (ctrl.Result, error) {
 	funcs := []func(context.Context, *appsv1.StatefulSet) (ctrl.Result, error){
 		o.postNextStatusMsgForSts,
+		o.bringSubclusterOffline,
 		o.drainSubcluster,
 		o.postNextStatusMsgForSts,
+		o.shutdownSubcluster,
 		o.recreateSubclusterWithNewImage,
 		o.postNextStatusMsgForSts,
 		o.addPodAnnotations,
@@ -398,27 +410,94 @@ func (o *OnlineUpgradeReconciler) isMatchingSubclusterType(sts *appsv1.StatefulS
 	return sts.Labels[vmeta.SubclusterTypeLabel] == scType && !isTransient, nil
 }
 
-// drainSubcluster will reroute traffic away from a subcluster and wait for it to be idle.
-// This is a no-op if the image has already been updated for the subcluster.
-func (o *OnlineUpgradeReconciler) drainSubcluster(ctx context.Context, sts *appsv1.StatefulSet) (ctrl.Result, error) {
-	img := sts.Spec.Template.Spec.Containers[ServerContainerIndex].Image
-
-	if img != o.Vdb.Spec.Image {
-		scName := sts.Labels[vmeta.SubclusterNameLabel]
-		o.Log.Info("rerouting client traffic from subcluster", "name", scName)
-		if err := o.routeClientTraffic(ctx, scName, true); err != nil {
-			return ctrl.Result{}, err
-		}
-
-		o.Log.Info("starting check for active connections in subcluster", "name", scName)
-		return o.isSubclusterIdle(ctx, scName)
+// bringSubclusterOffline will reroute traffic away from a subcluster to prepare it
+// for draining.  This is a no-op if the image has already been updated for the
+// subcluster.
+func (o *OnlineUpgradeReconciler) bringSubclusterOffline(ctx context.Context, sts *appsv1.StatefulSet) (ctrl.Result, error) {
+	scName, ok := o.getSubclusterIfOldImage(sts)
+	if !ok {
+		return ctrl.Result{}, nil
+	}
+	o.Log.Info("rerouting client traffic from subcluster", "name", scName)
+	if err := o.routeClientTraffic(ctx, scName, true); err != nil {
+		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
 }
 
+// drainSubcluster will check or wait for a subcluster to be drained of its
+// connections. On newer versions (12.0.x+), we can use the meta-function that
+// waits synchronously for the drain (with a timeout). Older versions will check
+// the sessions and requeue if there is still a connection. This is a no-op if
+// the image has already been updated for the subcluster.
+func (o *OnlineUpgradeReconciler) drainSubcluster(ctx context.Context, sts *appsv1.StatefulSet) (ctrl.Result, error) {
+	scName, ok := o.getSubclusterIfOldImage(sts)
+	if !ok {
+		return ctrl.Result{}, nil
+	}
+	// Older vertica images don't have drain meta-function. Fall back to old
+	// method of querying sessions.
+	vinf, ok := o.Vdb.MakeVersionInfo()
+	if !ok || vinf.IsOlder(vapi.SubclusterDrainVersion) {
+		o.Log.Info("starting check for active connections in subcluster", "name", scName)
+		return o.isSubclusterIdle(ctx, scName)
+	}
+
+	// We have complex logic to drain all of the primaries with a single timeout
+	// value. If we are not draining a primary or we are to wait indefinitely,
+	// early out with the simple drain.
+	isSecondary := sts.Labels[vmeta.SubclusterTypeLabel] == vapi.SecondarySubclusterType
+	if isSecondary || !o.UsePrimaryDrainWaitBudget {
+		sql := fmt.Sprintf("select shutdown_with_drain('%s', %d)", scName, o.getDrainTimeout())
+		_, _, err := o.runVsqlIfUp(ctx, scName, sql)
+		o.updatePodFactsForSubclusterShutdown(scName)
+		return ctrl.Result{}, err
+	}
+
+	// When shutting down the primaries, we have a single timeout for all. We do
+	// this because we want the timeout to start when we direct traffic away
+	// from the subcluster. Because primaries are used for cluster quorum we
+	// take them all down at once. Secondaries we do subcluster at a time, so
+	// can live with a timeout per subcluster.
+	drainTimeout := o.PrimaryDrainWaitBudget
+	sql := fmt.Sprintf("select shutdown_with_drain('%s', %d)", scName, drainTimeout)
+	start := time.Now()
+	_, _, err := o.runVsqlIfUp(ctx, scName, sql)
+	elapsedTimeInSeconds := int(time.Since(start).Seconds())
+	o.PrimaryDrainWaitBudget -= elapsedTimeInSeconds
+	if o.PrimaryDrainWaitBudget < 0 {
+		o.PrimaryDrainWaitBudget = 0
+	}
+	o.Log.Info("Time remaining in primary subcluster drain wait", "seconds", o.PrimaryDrainWaitBudget)
+	o.updatePodFactsForSubclusterShutdown(scName)
+	return ctrl.Result{}, err
+}
+
+// shutdownSubcluster will stop the given subcluster immediately.
+func (o *OnlineUpgradeReconciler) shutdownSubcluster(ctx context.Context, sts *appsv1.StatefulSet) (ctrl.Result, error) {
+	scName, ok := o.getSubclusterIfOldImage(sts)
+	if !ok {
+		return ctrl.Result{}, nil
+	}
+	sql := fmt.Sprintf("select shutdown_subcluster('%s')", scName)
+	_, _, err := o.runVsqlIfUp(ctx, scName, sql)
+	return ctrl.Result{}, err
+}
+
+// getSubclusterIfOldImage returns the name of the current subcluster if still
+// running the old image.
+func (o *OnlineUpgradeReconciler) getSubclusterIfOldImage(sts *appsv1.StatefulSet) (string, bool) {
+	img := sts.Spec.Template.Spec.Containers[ServerContainerIndex].Image
+	if img != o.Vdb.Spec.Image {
+		return sts.Labels[vmeta.SubclusterNameLabel], true
+	}
+	return "", false
+}
+
 // recreateSubclusterWithNewImage will recreate the subcluster so that it runs with the
 // new image.
-func (o *OnlineUpgradeReconciler) recreateSubclusterWithNewImage(ctx context.Context, sts *appsv1.StatefulSet) (ctrl.Result, error) {
+func (o *OnlineUpgradeReconciler) recreateSubclusterWithNewImage(ctx context.Context, sts *appsv1.StatefulSet) (
+	ctrl.Result, error) {
 	var err error
 
 	stsChanged, err := o.Manager.updateImageInStatefulSet(ctx, sts)
@@ -783,25 +862,27 @@ func (o *OnlineUpgradeReconciler) pickDefaultSubclusterForTemporaryRouting(offli
 	return nil
 }
 
+// updatePodFactsForSubclusterShutdown will refresh pod facts state to reflect
+// the shutdown we just performed.
+func (o *OnlineUpgradeReconciler) updatePodFactsForSubclusterShutdown(scName string) {
+	for _, v := range o.PFacts.Detail {
+		if v.isPodRunning && v.subclusterName == scName {
+			v.upNode = false
+		}
+	}
+}
+
 // isSubclusterIdle will run a query to see the number of connections
 // that are active for a given subcluster.  It returns a requeue error if there
 // are active connections still.
 func (o *OnlineUpgradeReconciler) isSubclusterIdle(ctx context.Context, scName string) (ctrl.Result, error) {
-	pf, ok := o.PFacts.findPodToRunVsql(true, scName)
-	if !ok {
-		o.Log.Info("No pod found to run vsql.  Skipping active connection check")
-		return ctrl.Result{}, nil
-	}
-
 	sql := fmt.Sprintf(
 		"select count(session_id) sessions"+
 			" from v_monitor.sessions join v_catalog.subclusters using (node_name)"+
 			" where session_id not in (select session_id from current_session)"+
 			"       and subcluster_name = '%s';", scName)
-
-	cmd := []string{"-tAc", sql}
-	stdout, _, err := o.PRunner.ExecVSQL(ctx, pf.name, names.ServerContainer, cmd...)
-	if err != nil {
+	stdout, foundUpNode, err := o.runVsqlIfUp(ctx, scName, sql)
+	if err != nil || !foundUpNode {
 		return ctrl.Result{}, err
 	}
 
@@ -813,6 +894,46 @@ func (o *OnlineUpgradeReconciler) isSubclusterIdle(ctx context.Context, scName s
 			"Subcluster '%s' has active connections preventing the drain from succeeding", scName)
 	}
 	return res, nil
+}
+
+// runVsqlIfUp will run a vsql command againt the database if it can find an up
+// node. SQL is skipped if no UP node found.
+func (o *OnlineUpgradeReconciler) runVsqlIfUp(ctx context.Context, scName, sql string) (
+	stdout string, foundUpNode bool, err error) {
+	var pf *PodFact
+	pf, foundUpNode = o.PFacts.findPodToRunVsql(true, scName)
+	if !foundUpNode {
+		o.Log.Info("No pod found to run vsql so skipping", "sql", sql)
+		return
+	}
+
+	var stderr string
+	cmd := []string{"-tAc", sql}
+	stdout, stderr, err = o.PRunner.ExecVSQL(ctx, pf.name, names.ServerContainer, cmd...)
+	if err != nil {
+		// Up node was actually down? This is fine since the SQL was only meant
+		// to run if vertica was up.
+		re := regexp.MustCompile(`Is the server running on host`)
+		if re.MatchString(stderr) {
+			o.Log.Info("Expected failure with vsql because server wasn't up")
+			foundUpNode = false
+			err = nil
+		}
+	}
+	return
+}
+
+// getDrainTimeout returns the timeout to use for subcluster drain
+func (o *OnlineUpgradeReconciler) getDrainTimeout() int {
+	annotatedTimeout, ok := o.Vdb.Annotations[vmeta.DrainTimeoutAnnotation]
+	if !ok {
+		return vmeta.DrainTimeoutDefaultValue
+	}
+	v, err := strconv.Atoi(annotatedTimeout)
+	if err != nil || v < -1 {
+		return vmeta.DrainTimeoutDefaultValue
+	}
+	return v
 }
 
 // anyActiveConnections will parse the output from vsql to see if there

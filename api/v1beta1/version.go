@@ -41,6 +41,8 @@ const (
 	// The minimum version that we can use the option with create DB to skip the
 	// package install.
 	CreateDBSkipPackageInstallVersion = "v12.0.1"
+	// The version that added support for subcluster drain meta-function
+	SubclusterDrainVersion = "v12.0.0"
 )
 
 // GetVerticaVersionStr returns the vertica version, in string form, that is stored
