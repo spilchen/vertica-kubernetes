@@ -1,0 +1,58 @@
+name: e2e (v11 sanity) tests
+
+on: 
+  workflow_call:
+    inputs:
+      operator-image:
+        type: string
+        required: false
+    secrets:
+      DOCKERHUB_USERNAME:
+        description: 'When working with images from docker.io, this is the username for login purposes'
+        required: true
+      DOCKERHUB_TOKEN:
+        description: 'When working with images from docker.io, this is the password for login purposes'
+        required: true
+  workflow_dispatch:
+    inputs:
+      operator-image:
+        description: 'Name of the operator image'
+        type: string
+        required: false
+
+jobs:
+
+  test:
+
+    runs-on: ubuntu-latest
+    steps:
+
+    - uses: actions/checkout@v3
+
+    - name: Set up e2e environment
+      uses: ./.github/actions/setup-e2e
+      
+    - name: Login to Docker Hub
+      uses: docker/login-action@v2
+      if: ${{ startsWith(inputs.operator-image, 'docker.io') }}
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    - name: Run e2e tests
+      run: |
+        # The minimum vertica version must support online upgrade
+        export BASE_VERTICA_IMG=vertica/vertica-k8s:11.1.0-0-minimal
+        export VERTICA_IMG=vertica/vertica-k8s:11.1.1-2-minimal
+        export VLOGGER_IMG=vertica/vertica-logger:1.0.0
+        export OPERATOR_IMG=${{ inputs.operator-image }}
+        export E2E_ADDITIONAL_ARGS="--test '^sanity-.*'"
+        export DEPLOY_WITH=helm
+        scripts/run-k8s-int-tests.sh -s
+
+    - uses: actions/upload-artifact@v3
+      if: failure()
+      with:
+        name: logs-v11-sanity
+        path: ${{ github.workspace }}/int-tests-output/*
+

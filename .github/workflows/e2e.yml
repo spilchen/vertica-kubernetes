@@ -43,6 +43,7 @@ on:
         - hostpath
         - enterprise 
         - http server
+        - v11 sanity
       security_scan_exit_code:
         description: 'Set to 1 to fail the build for security vulnerabilities. Otherwise set to 0'
         required: false
@@ -204,6 +205,17 @@ jobs:
       vlogger-image: ${{ needs.build.outputs.vlogger-image }}
       operator-image: ${{ needs.build.outputs.operator-image }}
       vertica-image: ${{ needs.build.outputs.full-vertica-image }}
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+
+  e2e-v11-sanity:
+    if: ${{ inputs.e2e_test_suites == 'all' || inputs.e2e_test_suites == 'v11 sanity' || inputs.e2e_test_suites == '' }}
+    needs: [build] 
+    uses: ./.github/workflows/e2e-v11-sanity.yml
+    with:
+      operator-image: ${{ needs.build.outputs.operator-image }}
     secrets:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
