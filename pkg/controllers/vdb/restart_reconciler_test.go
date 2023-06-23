@@ -130,7 +130,6 @@ var _ = Describe("restart_reconciler", func() {
 		initiatorPod := names.GenPodName(vdb, sc, 3)
 		fpr.Results[initiatorPod] = []cmds.CmdResult{
 			{}, // check up node status via -t list_allnodes
-			{}, // command that will dump admintools.conf vitals
 			{
 				Err:    errors.New("all nodes are not down"),
 				Stdout: "All nodes in the input are not down, can't restart",
@@ -429,20 +428,6 @@ var _ = Describe("restart_reconciler", func() {
 		Expect(act.Reconcile(ctx, &ctrl.Request{})).Should(Equal(ctrl.Result{}))
 		restart := fpr.FindCommands("/opt/vertica/bin/admintools", "-t", "restart_node")
 		Expect(len(restart)).Should(Equal(0))
-	})
-
-	It("should use --hosts option in start_db if on earliest version that we support", func() {
-		vdb := vapi.MakeVDB()
-		fpr := &cmds.FakePodRunner{}
-		dispatcher := vdbRec.makeDispatcher(logger, vdb, fpr)
-		act := MakeRestartReconciler(vdbRec, logger, vdb, fpr, &PodFacts{}, RestartProcessReadOnly, dispatcher)
-		r := act.(*RestartReconciler)
-		downPods := []*PodFact{
-			{podIP: "9.10.1.1"},
-			{podIP: "9.10.1.2"},
-		}
-		vdb.Annotations[vapi.VersionAnnotation] = vapi.MinimumVersion
-		Expect(r.genStartDBCommand(downPods)).Should(ContainElements("--hosts", "9.10.1.1,9.10.1.2"))
 	})
 
 	It("should requeue if k-safety is 0, there are no UP nodes and some pods aren't running", func() {
