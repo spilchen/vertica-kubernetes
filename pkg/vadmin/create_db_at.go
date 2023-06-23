@@ -28,11 +28,19 @@ import (
 )
 
 // CreateDB will create a brand new database using the admintools API (-t create_db).
+//
+//nolint:dupl
 func (a Admintools) CreateDB(ctx context.Context, opts ...createdb.Option) (ctrl.Result, error) {
 	s := createdb.Parms{}
 	s.Make(opts...)
 	cmd := a.genCreateDBCmd(&s)
+	if a.DevMode {
+		a.debugDumpAdmintoolsConf(ctx, s.Initiator)
+	}
 	stdout, _, err := a.PRunner.ExecAdmintools(ctx, s.Initiator, names.ServerContainer, cmd...)
+	if a.DevMode {
+		a.debugDumpAdmintoolsConf(ctx, s.Initiator)
+	}
 	if err != nil {
 		return a.logFailure("create_db", events.CreateDBFailed, stdout, err)
 	}

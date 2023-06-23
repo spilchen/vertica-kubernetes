@@ -29,6 +29,10 @@ import (
 // RestartNode will restart a subset of nodes. Use this when vertica has not
 // lost cluster quorum. The IP given for each vnode may not match the current IP
 // in the vertica catalogs.
+//
+// SPILLY - add debug flag to ExecAdmintools and do it through there?
+//
+//nolint:dupl
 func (a Admintools) RestartNode(ctx context.Context, opts ...restartnode.Option) (ctrl.Result, error) {
 	s := restartnode.Parms{}
 	s.Make(opts...)

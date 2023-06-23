@@ -29,11 +29,19 @@ import (
 
 // ReviveDB will initialize a database from an existing communal path.
 // Admintools is used to run the revive.
+//
+//nolint:dupl
 func (a Admintools) ReviveDB(ctx context.Context, opts ...revivedb.Option) (ctrl.Result, error) {
 	s := revivedb.Parms{}
 	s.Make(opts...)
 	cmd := a.genReviveCmd(&s)
+	if a.DevMode {
+		a.debugDumpAdmintoolsConf(ctx, s.Initiator)
+	}
 	stdout, _, err := a.PRunner.ExecAdmintools(ctx, s.Initiator, names.ServerContainer, cmd...)
+	if a.DevMode {
+		a.debugDumpAdmintoolsConf(ctx, s.Initiator)
+	}
 	if err != nil {
 		return a.logFailure("revive_db", events.ReviveDBFailed, stdout, err)
 	}
