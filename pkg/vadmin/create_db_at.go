@@ -21,26 +21,17 @@ import (
 	"strings"
 
 	"github.com/vertica/vertica-kubernetes/pkg/events"
-	"github.com/vertica/vertica-kubernetes/pkg/names"
 	"github.com/vertica/vertica-kubernetes/pkg/paths"
 	"github.com/vertica/vertica-kubernetes/pkg/vadmin/opts/createdb"
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
 // CreateDB will create a brand new database using the admintools API (-t create_db).
-//
-//nolint:dupl
 func (a Admintools) CreateDB(ctx context.Context, opts ...createdb.Option) (ctrl.Result, error) {
 	s := createdb.Parms{}
 	s.Make(opts...)
 	cmd := a.genCreateDBCmd(&s)
-	if a.DevMode {
-		a.debugDumpAdmintoolsConf(ctx, s.Initiator)
-	}
-	stdout, _, err := a.PRunner.ExecAdmintools(ctx, s.Initiator, names.ServerContainer, cmd...)
-	if a.DevMode {
-		a.debugDumpAdmintoolsConf(ctx, s.Initiator)
-	}
+	stdout, err := a.execAdmintools(ctx, s.Initiator, cmd...)
 	if err != nil {
 		return a.logFailure("create_db", events.CreateDBFailed, stdout, err)
 	}

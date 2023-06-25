@@ -18,7 +18,6 @@ package vadmin
 import (
 	"context"
 
-	"github.com/vertica/vertica-kubernetes/pkg/names"
 	"github.com/vertica/vertica-kubernetes/pkg/vadmin/opts/addsc"
 )
 
@@ -47,6 +46,6 @@ func (a Admintools) AddSubcluster(ctx context.Context, opts ...addsc.Option) err
 		}
 	}
 
-	_, _, err := a.PRunner.ExecAdmintools(ctx, s.InitiatorName, names.ServerContainer, cmd...)
+	_, err := a.execAdmintools(ctx, s.InitiatorName, cmd...)
 	return err
 }

@@ -19,6 +19,7 @@ import (
 	"context"
 
 	"github.com/vertica/vertica-kubernetes/pkg/mgmterrors"
+	"github.com/vertica/vertica-kubernetes/pkg/names"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 )
@@ -35,4 +36,16 @@ func (a Admintools) logFailure(cmd, genericFailureReason, op string, err error) 
 // debugDumpAdmintoolsConf will dump specific info from admintools.conf for logging purposes
 func (a Admintools) debugDumpAdmintoolsConf(ctx context.Context, atPod types.NamespacedName) {
 	a.PRunner.DumpAdmintoolsConf(ctx, atPod)
+}
+
+// execAdmintools is a wrapper for ExecAdmintools returning the result of the action.
+func (a Admintools) execAdmintools(ctx context.Context, initiator types.NamespacedName, cmd ...string) (string, error) {
+	if a.DevMode {
+		a.debugDumpAdmintoolsConf(ctx, initiator)
+	}
+	stdout, _, err := a.PRunner.ExecAdmintools(ctx, initiator, names.ServerContainer, cmd...)
+	if a.DevMode {
+		a.debugDumpAdmintoolsConf(ctx, initiator)
+	}
+	return stdout, err
 }

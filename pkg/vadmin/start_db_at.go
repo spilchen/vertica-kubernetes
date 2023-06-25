@@ -21,7 +21,6 @@ import (
 	"strings"
 
 	"github.com/vertica/vertica-kubernetes/pkg/events"
-	"github.com/vertica/vertica-kubernetes/pkg/names"
 	"github.com/vertica/vertica-kubernetes/pkg/vadmin/opts/startdb"
 	ctrl "sigs.k8s.io/controller-runtime"
 )
@@ -33,7 +32,7 @@ func (a Admintools) StartDB(ctx context.Context, opts ...startdb.Option) (ctrl.R
 	s := startdb.Parms{}
 	s.Make(opts...)
 	cmd := a.genStartDBCommand(&s)
-	stdout, _, err := a.PRunner.ExecAdmintools(ctx, s.InitiatorName, names.ServerContainer, cmd...)
+	stdout, err := a.execAdmintools(ctx, s.InitiatorName, cmd...)
 	if err != nil {
 		return a.logFailure("start_db", events.MgmtFailed, stdout, err)
 	}

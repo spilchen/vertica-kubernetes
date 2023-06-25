@@ -21,7 +21,6 @@ import (
 	"strings"
 
 	"github.com/vertica/vertica-kubernetes/pkg/events"
-	"github.com/vertica/vertica-kubernetes/pkg/names"
 	"github.com/vertica/vertica-kubernetes/pkg/vadmin/opts/restartnode"
 	ctrl "sigs.k8s.io/controller-runtime"
 )
@@ -29,21 +28,11 @@ import (
 // RestartNode will restart a subset of nodes. Use this when vertica has not
 // lost cluster quorum. The IP given for each vnode may not match the current IP
 // in the vertica catalogs.
-//
-// SPILLY - add debug flag to ExecAdmintools and do it through there?
-//
-//nolint:dupl
 func (a Admintools) RestartNode(ctx context.Context, opts ...restartnode.Option) (ctrl.Result, error) {
 	s := restartnode.Parms{}
 	s.Make(opts...)
 	cmd := a.genRestartNodeCmd(&s)
-	if a.DevMode {
-		a.debugDumpAdmintoolsConf(ctx, s.InitiatorName)
-	}
-	stdout, _, err := a.PRunner.ExecAdmintools(ctx, s.InitiatorName, names.ServerContainer, cmd...)
-	if a.DevMode {
-		a.debugDumpAdmintoolsConf(ctx, s.InitiatorName)
-	}
+	stdout, err := a.execAdmintools(ctx, s.InitiatorName, cmd...)
 	if err != nil {
 		return a.logFailure("restart_node", events.MgmtFailed, stdout, err)
 	}
