@@ -19,6 +19,10 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/icza/gog"
+	vops "github.com/vertica/vcluster/vclusterops"
+	vapi "github.com/vertica/vertica-kubernetes/api/v1beta1"
+	"github.com/vertica/vertica-kubernetes/pkg/net"
 	"github.com/vertica/vertica-kubernetes/pkg/vadmin/opts/addnode"
 )
 
@@ -27,5 +31,43 @@ func (v *VClusterOps) AddNode(ctx context.Context, opts ...addnode.Option) error
 	v.Log.Info("Starting vcluster AddNode")
 	s := addnode.Parms{}
 	s.Make(opts...)
-	return fmt.Errorf("not implemented")
+	vaddNodeOptions, err := v.buildAddNodeOptions(ctx, &s)
+	if err != nil {
+		return fmt.Errorf("failed to build add node options: %w", err)
+	}
+	newNodeInfo, err := vops.VAddNode(vaddNodeOptions)
+	v.Log.Info("vcluster AddNode is done", "newNodeInfo", newNodeInfo, "err", err)
+	return err
+}
+
+// buildAddNodeOptions will build up the options struct to be passed into VAddNode
+func (v *VClusterOps) buildAddNodeOptions(ctx context.Context, s *addnode.Parms) (*vops.VAddNodeOptions, error) {
+	// get the certs
+	certs, err := v.retrieveHTTPSCerts(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	opts := &vops.VAddNodeOptions{
+		BootstrapHost:  s.InitiatorIP,
+		SubclusterName: s.Subcluster,
+		DatabaseOptions: vops.DatabaseOptions{
+			Name:            &v.VDB.Spec.DBName,
+			RawHosts:        s.Hosts,
+			Ipv6:            gog.Ptr(net.IsIPv6(s.InitiatorIP)),
+			CatalogPrefix:   gog.Ptr(v.VDB.Spec.Local.GetCatalogPath()),
+			DataPrefix:      &v.VDB.Spec.Local.DataPath,
+			ConfigDirectory: nil,
+			DepotPrefix:     &v.VDB.Spec.Local.DepotPath,
+			IsEon:           gog.Ptr(v.VDB.IsEON()),
+			UserName:        gog.Ptr(vapi.SuperUser),
+			Password:        &v.Password,
+			Key:             certs.Key,
+			Cert:            certs.Cert,
+			CaCert:          certs.CaCert,
+			LogPath:         nil,
+			HonorUserInput:  gog.Ptr(true),
+		},
+	}
+	return opts, nil
 }
