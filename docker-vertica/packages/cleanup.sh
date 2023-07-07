@@ -78,5 +78,5 @@ fi
 # However, this requries a server change. We don't use nma in k8s. So, to
 # expediate things, we are just going to remove it.  We need to add this back
 # when it has been addressed in the server rpm.
-rm /opt/vertica/bin/node_management_agent || true # nma is only in 12.0.0+
-rm /opt/vertica/bin/vcluster || true # vcluster is only in 23.3.x+
+#rm /opt/vertica/bin/node_management_agent || true # nma is only in 12.0.0+
+#rm /opt/vertica/bin/vcluster || true # vcluster is only in 23.3.x+
